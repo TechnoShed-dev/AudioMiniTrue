@@ -1,14 +1,14 @@
 # ------------------------------------------------------------------------------
 # Project:      AudioMiniTrue
 # Filename:     app.py
-# Version:      v1.2.0
+# Version:      v1.4.0
 # Author:       Karl @ TechnoShed
 # Date:         2026-02-15
 # Website:      https://technoshed.co.uk
 # Description:  The MP3 History Rewriter.
-#               - Symlink Mode: Creates organzied links for Radio stations.
-#               - Move Mode: Physical relocation for DJ sets.
-#               - Smart Spacing: Fixes "SundaySession001" artifacts.
+#               - NEW: Automatic cleanup of empty source folders after Move.
+#               - Mode: Move (Physical) or Symlink (Virtual Migration).
+#               - Bulk Tagging & Smart Spacing for Radio Station dumps.
 # ------------------------------------------------------------------------------
 
 import streamlit as st
@@ -20,12 +20,12 @@ from mutagen.easyid3 import EasyID3
 import mutagen
 
 # --- Config ---
-st.set_page_config(page_title="Minitrue v1.2", layout="wide", page_icon="🔗")
+st.set_page_config(page_title="Minitrue v1.4", layout="wide", page_icon="🧹")
 ROOT_DIR = "/music"
 LIBRARY_DIR = os.path.join(ROOT_DIR, "Library")
 PROTECTED_FOLDERS = ["jingles", "adverts", "station_ids", "sweepers", "news", "ftp_upload"]
 
-# --- CSS Injection ---
+# --- CSS Injection (Slim Sidebar & Layout) ---
 st.markdown(
     """
     <style>
@@ -43,9 +43,22 @@ if 'df_editor' not in st.session_state: st.session_state.df_editor = None
 if 'safety_lock' not in st.session_state: st.session_state.safety_lock = True
 if 'operation_mode' not in st.session_state: st.session_state.operation_mode = "Move"
 
-# --- Helpers ---
+# --- Helper Functions ---
 def sanitize_name(name):
     return re.sub(r'[\\/*?:"<>|]', "", str(name)).strip()
+
+def remove_empty_folders(path):
+    """Recursively removes empty folders up to ROOT_DIR."""
+    if not os.path.isdir(path) or path == ROOT_DIR:
+        return
+    if os.path.basename(path).lower() in PROTECTED_FOLDERS:
+        return
+    if not os.listdir(path):
+        try:
+            os.rmdir(path)
+            remove_empty_folders(os.path.dirname(path))
+        except Exception:
+            pass
 
 def get_files_in_directory(path):
     try:
@@ -64,19 +77,19 @@ def get_mp3_tags(file_path):
         return {
             "Status": "Pending",
             "Artist": audio.get('artist', [''])[0],
-            "Title": audio.get('title', [''])[0],
             "Album": audio.get('album', [''])[0],
+            "Title": audio.get('title', [''])[0],
             "File": os.path.basename(file_path),
             "Full Path": file_path
         }
     except mutagen.id3.ID3NoHeaderError:
-        return {"Status": "No Tags", "Artist": "", "Title": "", "Album": "", "File": os.path.basename(file_path), "Full Path": file_path}
+        return {"Status": "No Tags", "Artist": "", "Album": "", "Title": "", "File": os.path.basename(file_path), "Full Path": file_path}
     except Exception:
-        return {"Status": "Error", "Artist": "", "Title": "", "Album": "", "File": os.path.basename(file_path), "Full Path": file_path}
+        return {"Status": "Error", "Artist": "", "Album": "", "Title": "", "File": os.path.basename(file_path), "Full Path": file_path}
 
 def clean_radio_filename(filename, operation):
     base = os.path.splitext(filename)[0]
-    if operation == "Strip Numeric Prefix (1001_...)": base = re.sub(r'^\d+_+', '', base)
+    if operation == "Strip Numeric Prefix": base = re.sub(r'^\d+_+', '', base)
     elif operation == "Underscores to Spaces": base = base.replace("_", " ")
     elif operation == "Title Case": base = base.title()
     elif operation == "Smart Space (Session001 -> Session 001)":
@@ -84,7 +97,7 @@ def clean_radio_filename(filename, operation):
         base = base[0].upper() + base[1:] if base else base
     return base
 
-# --- Logic ---
+# --- Core Logic ---
 def process_file_dry_run(row, mode):
     src_path = row['Full Path']
     artist = sanitize_name(row['Artist'])
@@ -98,41 +111,47 @@ def process_file_dry_run(row, mode):
 
 def process_file_live(row, mode):
     src_path = row['Full Path']
+    src_dir = os.path.dirname(src_path)
     artist = sanitize_name(row['Artist'])
-    album = sanitize_name(row['Album'])
+    album_tag = sanitize_name(row['Album'])
     title_tag = row['Title'].strip()
+    
     if not artist or not title_tag: return "❌ Missing Data"
     for p in PROTECTED_FOLDERS:
         if f"/{p}/" in src_path or src_path.endswith(f"/{p}"): return f"🛡️ Protected"
-    target_album = album if album else "Singles"
+    
+    target_album = album_tag if album_tag else "Singles"
     dest_dir = os.path.join(LIBRARY_DIR, artist, target_album)
-    clean_filename = sanitize_name(title_tag) + ".mp3"
-    dest_path = os.path.join(dest_dir, clean_filename)
+    dest_path = os.path.join(dest_dir, sanitize_name(title_tag) + ".mp3")
+
     if os.path.exists(dest_path): return f"⚠️ Exists"
+
     try:
         try:
             audio = EasyID3(src_path)
         except mutagen.id3.ID3NoHeaderError:
             audio = EasyID3(); audio.save(src_path); audio = EasyID3(src_path)
+        
         audio['artist'] = artist; audio['album'] = target_album; audio['title'] = title_tag
         audio.save()
+
         os.makedirs(dest_dir, exist_ok=True)
         if mode == "Move":
             shutil.move(src_path, dest_path)
+            remove_empty_folders(src_dir)
             return "✅ Moved"
         else:
             rel_source = os.path.relpath(src_path, dest_dir)
             os.symlink(rel_source, dest_path)
             return "🔗 Linked"
     except Exception as e:
-        return f"❌ Error: {str(e)}"
+        return f"❌ Error"
 
 # --- UI ---
 with st.sidebar:
     if os.path.exists("logo.jpg"): st.image("logo.jpg", use_container_width=True)
     st.markdown("### Nav")
     if st.button("🏠 Root"): st.session_state.current_path = ROOT_DIR; st.rerun()
-    st.caption(f"📂 ...{st.session_state.current_path[-20:]}" if len(st.session_state.current_path) > 20 else st.session_state.current_path)
     st.divider()
     st.markdown("### ⚙️ Mode")
     st.session_state.operation_mode = st.radio("Action Type:", ["Move", "Symlink"])
@@ -146,10 +165,9 @@ with st.sidebar:
         st.error(f"🔓 LIVE {st.session_state.operation_mode.upper()}")
         if st.button("🔒 Re-Lock"): st.session_state.safety_lock = True; st.rerun()
 
-st.title(f"📻 Minitrue v1.2 ({st.session_state.operation_mode} Mode)")
+st.title(f"📻 Minitrue v1.4")
 if not st.session_state.safety_lock:
-    action_text = "MOVED" if st.session_state.operation_mode == "Move" else "LINKED"
-    st.markdown(f'<div class="live-warning">☢️ LIVE MODE: FILES WILL BE {action_text} ☢️</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="live-warning">☢️ LIVE MODE: FILES WILL BE {st.session_state.operation_mode.upper()}D ☢️</div>', unsafe_allow_html=True)
 
 col1, col2 = st.columns([1, 6])
 with col1:
@@ -167,79 +185,56 @@ if dirs:
         if cols[i % 5].button(label, key=f"dir_{d}_{i}"): st.session_state.current_path = os.path.join(st.session_state.current_path, d); st.rerun()
 
 st.divider()
-st.subheader(f"🎵 Editing: {os.path.basename(st.session_state.current_path)}")
-
 if files:
-    if st.button("🔄 Load/Refresh Files"):
+    if st.button("🔄 Load Files"):
         tag_data = []
         for f in files:
-            full_path = os.path.join(st.session_state.current_path, f)
-            tag_data.append(get_mp3_tags(full_path))
+            tag_data.append(get_mp3_tags(os.path.join(st.session_state.current_path, f)))
         st.session_state.df_editor = pd.DataFrame(tag_data)
 
-    if st.session_state.df_editor is not None and not st.session_state.df_editor.empty:
-        with st.expander("🛠️ Bulk Tools", expanded=False):
+    if st.session_state.df_editor is not None:
+        with st.expander("🛠️ Bulk Tools"):
             b1, b2, b3 = st.columns(3)
             with b1:
-                if st.button("⬇️ Fill Down Artists"):
-                    df = st.session_state.df_editor
-                    df['Artist'] = df['Artist'].replace('', pd.NA).ffill().fillna('')
-                    st.session_state.df_editor = df; st.rerun()
+                if st.button("⬇️ Artist Fill Down"):
+                    st.session_state.df_editor['Artist'] = st.session_state.df_editor['Artist'].replace('', pd.NA).ffill().fillna(''); st.rerun()
             with b2:
-                bulk_art = st.text_input("Set Artist")
-                if st.button("Set All"):
-                    if bulk_art:
-                        df = st.session_state.df_editor; df['Artist'] = bulk_art; st.session_state.df_editor = df; st.rerun()
+                if st.button("⬇️ Album Fill Down"):
+                    st.session_state.df_editor['Album'] = st.session_state.df_editor['Album'].replace('', pd.NA).ffill().fillna(''); st.rerun()
             with b3:
-                if st.button("✨ Auto-Guess"):
-                    df = st.session_state.df_editor
-                    valid = df[df['Artist'] != '']['Artist']
-                    if not valid.empty:
-                        common = valid.mode()[0]
-                        df['Artist'] = df['Artist'].apply(lambda x: common if x == '' else x)
-                        st.session_state.df_editor = df; st.rerun()
+                if st.button("✨ Guess Folder Tags"):
+                    curr = os.path.basename(st.session_state.current_path)
+                    parent = os.path.basename(os.path.dirname(st.session_state.current_path))
+                    st.session_state.df_editor['Artist'] = st.session_state.df_editor['Artist'].apply(lambda x: parent if x == '' else x)
+                    st.session_state.df_editor['Album'] = st.session_state.df_editor['Album'].apply(lambda x: curr if x == '' else x); st.rerun()
 
         tab_clean, tab_parse = st.tabs(["🧹 Cleaner", "📝 Parser"])
         with tab_clean:
             op = st.selectbox("Operation", ["Smart Space (Session001 -> Session 001)", "Strip Numeric Prefix", "Underscores to Spaces", "Title Case"])
             if st.button("Apply"):
-                df = st.session_state.df_editor
-                df['File'] = df['File'].apply(lambda x: clean_radio_filename(x, op) + ".mp3")
-                st.session_state.df_editor = df; st.rerun()
+                st.session_state.df_editor['File'] = st.session_state.df_editor['File'].apply(lambda x: clean_radio_filename(x, op) + ".mp3"); st.rerun()
         with tab_parse:
-            pmode = st.radio("Pattern", ["Title Only", "Artist - Title"], horizontal=True)
+            pmode = st.radio("Pattern", ["Title Only", "Artist - Title", "Artist - Album - Title"], horizontal=True)
             if st.button("Apply Tags"):
                 df = st.session_state.df_editor
                 for idx, row in df.iterrows():
                     base = os.path.splitext(row['File'])[0]
+                    parts = base.split(" - ")
                     if pmode == "Title Only": df.at[idx, 'Title'] = base.strip()
-                    elif pmode == "Artist - Title":
-                        parts = base.split(" - ")
-                        if len(parts) >= 2: df.at[idx, 'Artist'] = parts[0].strip(); df.at[idx, 'Title'] = parts[1].strip()
+                    elif pmode == "Artist - Title" and len(parts) >= 2:
+                        df.at[idx, 'Artist'] = parts[0].strip(); df.at[idx, 'Title'] = parts[1].strip()
+                    elif pmode == "Artist - Album - Title" and len(parts) >= 3:
+                        df.at[idx, 'Artist'] = parts[0].strip(); df.at[idx, 'Album'] = parts[1].strip(); df.at[idx, 'Title'] = parts[2].strip()
                 st.session_state.df_editor = df; st.rerun()
 
-        edited_df = st.data_editor(
-            st.session_state.df_editor, hide_index=True,
-            column_order=["Status", "Artist", "Title", "Album", "File"],
-            column_config={
-                "Full Path": None,
-                "Status": st.column_config.TextColumn(width="small", disabled=True),
-                "Artist": st.column_config.TextColumn(width="medium", required=True),
-                "Title": st.column_config.TextColumn(width="medium", required=True),
-                "Album": st.column_config.TextColumn(width="medium", required=True),
-                "File": st.column_config.TextColumn(width="medium", disabled=True)
-            },
-            key="editor", use_container_width=True
-        )
+        edited_df = st.data_editor(st.session_state.df_editor, hide_index=True, column_order=["Status", "Artist", "Album", "Title", "File"], key="editor", use_container_width=True)
+        
         if st.session_state.safety_lock:
-            if st.button(f"🧪 Simulate ({st.session_state.operation_mode})"):
-                res = []; prog = st.progress(0); rows = edited_df.to_dict('records')
-                for i, r in enumerate(rows): res.append(process_file_dry_run(r, st.session_state.operation_mode)); prog.progress((i+1)/len(rows))
+            if st.button(f"🧪 Simulate {st.session_state.operation_mode}"):
+                res = [process_file_dry_run(r, st.session_state.operation_mode) for r in edited_df.to_dict('records')]
                 edited_df['Status'] = res; st.session_state.df_editor = edited_df; st.rerun()
         else:
-            btn_label = "☢️ COMMIT & MOVE ☢️" if st.session_state.operation_mode == "Move" else "🔗 COMMIT & LINK 🔗"
-            if st.button(btn_label, type="primary"):
-                res = []; prog = st.progress(0); rows = edited_df.to_dict('records')
-                for i, r in enumerate(rows): res.append(process_file_live(r, st.session_state.operation_mode)); prog.progress((i+1)/len(rows))
-                edited_df['Status'] = res; st.session_state.df_editor = edited_df; st.success("Batch Complete."); st.rerun()
-else: st.info("No MP3s found here.")
+            if st.button(f"☢️ COMMIT {st.session_state.operation_mode.upper()} ☢️", type="primary"):
+                res = [process_file_live(r, st.session_state.operation_mode) for r in edited_df.to_dict('records')]
+                edited_df['Status'] = res; st.session_state.df_editor = edited_df; st.rerun()
+else: st.info("No MP3s found.")

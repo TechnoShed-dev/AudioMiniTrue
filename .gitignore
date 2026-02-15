@@ -1,28 +1,15 @@
-# --- System & Git ---
+# System
 .git
 .DS_Store
 Thumbs.db
 
-# --- Python ---
+# Python
 __pycache__/
 *.pyc
-*.pyo
-*.pyd
-.Python
-env/
-venv/
 .venv/
-pip-log.txt
+env/
 
-# --- Docker ---
-.docker/
-
-# --- Streamlit ---
-.streamlit/secrets.toml
-
-# --- Minitrue Specific ---
-# Ignore the actual music if you accidentally copy it into the project root
+# Data (Avoid committing actual music)
 Library/
 *.mp3
 *.ogg
-*.flac

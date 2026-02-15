@@ -37,10 +37,3 @@ services:
 
 
 
-
-### Next Step: 
-Save these as `app.py` and `README.md`, then run:
-```bash
-git add .
-git commit -m "v1.4.0: Housekeeping, Symlinks, and Nuclear Lock"
-git push origin main

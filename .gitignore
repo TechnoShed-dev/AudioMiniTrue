@@ -1,0 +1,28 @@
+# --- System & Git ---
+.git
+.DS_Store
+Thumbs.db
+
+# --- Python ---
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+pip-log.txt
+
+# --- Docker ---
+.docker/
+
+# --- Streamlit ---
+.streamlit/secrets.toml
+
+# --- Minitrue Specific ---
+# Ignore the actual music if you accidentally copy it into the project root
+Library/
+*.mp3
+*.ogg
+*.flac

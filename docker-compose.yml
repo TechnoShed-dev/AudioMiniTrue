@@ -1,0 +1,10 @@
+services:
+  minitrue:
+    build: .
+    container_name: minitrue
+    ports:
+      - "8303:8501"  # <--- Host Port 8303 maps to Container Port 8501
+    volumes:
+      - .:/app
+      - /mnt/8tb/Audio:/music # <--- Don't forget to update this
+    restart: unless-stopped
